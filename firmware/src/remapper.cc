@@ -52,6 +52,8 @@ std::vector<reverse_mapping_t> reverse_mapping_layers;
 struct layer_release_candidate_t {
     int32_t* input_state;
     uint8_t mapped_layers;  // layers on which this usage has an explicit mapping
+    bool suppressed;        // press that released a layer; input is held at zero until the button is released
+    int32_t physical;       // real input state while suppressed
 };
 std::vector<layer_release_candidate_t> layer_release_candidates;
 
@@ -620,6 +622,8 @@ void set_mapping_from_config() {
             layer_release_candidates.push_back((layer_release_candidate_t){
                 .input_state = get_state_ptr(usage, 0),
                 .mapped_layers = mapped_on_layers[usage],
+                .suppressed = false,
+                .physical = 0,
             });
         }
     }
@@ -1117,6 +1121,35 @@ void process_mapping(bool auto_repeat) {
     uint64_t now = get_time();
     frame_counter++;
 
+    // Pressing a button that has no mapping on an active sticky layer releases that layer.
+    // The press that releases the layer is swallowed: its input is held at zero until the button is released.
+    for (auto& candidate : layer_release_candidates) {
+        int32_t physical = *candidate.input_state;
+        if (candidate.suppressed) {
+            if (physical == 0) {
+                candidate.suppressed = false;
+            }
+        } else if ((physical != 0) && (*(candidate.input_state + PREV_STATE_OFFSET) == 0)) {
+            for (auto const& rev_map : reverse_mapping_layers) {
+                uint16_t layer = rev_map.target & 0xFFFF;
+                if (!(layer_state_mask & (1 << layer)) || (candidate.mapped_layers & (1 << layer))) {
+                    continue;
+                }
+                for (auto const& map_source : rev_map.sources) {
+                    if (map_source.sticky && (*map_source.sticky_state & map_source.layer_mask)) {
+                        *map_source.sticky_state &= ~map_source.layer_mask;
+                        candidate.suppressed = true;
+                    }
+                }
+            }
+        }
+        if (candidate.suppressed) {
+            candidate.physical = physical;
+            *candidate.input_state = 0;
+            *(candidate.input_state + PREV_STATE_OFFSET) = 0;
+        }
+    }
+
     for (auto& tap_hold : tap_hold_usages) {
         if ((*tap_hold.input_state != 0) && (*(tap_hold.input_state + PREV_STATE_OFFSET) == 0)) {
             tap_hold.pressed_at = now;
@@ -1147,23 +1180,6 @@ void process_mapping(bool auto_repeat) {
         if ((layer_state_mask & hold_sticky.layer_mask) &&
             hold_sticky.tap_hold_state->hold && !hold_sticky.tap_hold_state->prev_hold) {
             *hold_sticky.sticky_state ^= (layer_state_mask & hold_sticky.layer_mask);
-        }
-    }
-
-    // Pressing a button that has no mapping on an active sticky layer releases that layer.
-    for (auto const& candidate : layer_release_candidates) {
-        if ((*(candidate.input_state + PREV_STATE_OFFSET) == 0) && (*candidate.input_state != 0)) {
-            for (auto const& rev_map : reverse_mapping_layers) {
-                uint16_t layer = rev_map.target & 0xFFFF;
-                if (!(layer_state_mask & (1 << layer)) || (candidate.mapped_layers & (1 << layer))) {
-                    continue;
-                }
-                for (auto const& map_source : rev_map.sources) {
-                    if (map_source.sticky) {
-                        *map_source.sticky_state &= ~map_source.layer_mask;
-                    }
-                }
-            }
         }
     }
 
@@ -1241,6 +1257,11 @@ void process_mapping(bool auto_repeat) {
     }
 
     memcpy(input_state + PREV_STATE_OFFSET, input_state, used_state_slots * sizeof(input_state[0]));
+    for (auto const& candidate : layer_release_candidates) {
+        if (candidate.suppressed) {
+            *candidate.input_state = candidate.physical;
+        }
+    }
     digipot_state[0] = 128;
     digipot_state[1] = 128;
     digipot_state[2] = 128;
@@ -2131,4 +2152,3 @@ void handle_set_report_complete(uint16_t interface, uint8_t report_id) {
         our_descriptor->handle_set_report_complete(interface, report_id);
     }
 }
-// build

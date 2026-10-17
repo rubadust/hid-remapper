@@ -1,9 +1,6 @@
 name: build-nrf52
 on:
-  push:
-    paths:
-      - 'firmware/**'
-      - 'firmware-bluetooth/**'
+  workflow_dispatch:
   workflow_call:
 defaults:
   run:

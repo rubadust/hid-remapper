@@ -1257,11 +1257,6 @@ void process_mapping(bool auto_repeat) {
     }
 
     memcpy(input_state + PREV_STATE_OFFSET, input_state, used_state_slots * sizeof(input_state[0]));
-    for (auto const& candidate : layer_release_candidates) {
-        if (candidate.suppressed) {
-            *candidate.input_state = candidate.physical;
-        }
-    }
     digipot_state[0] = 128;
     digipot_state[1] = 128;
     digipot_state[2] = 128;
@@ -1488,6 +1483,13 @@ void process_mapping(bool auto_repeat) {
             memcpy(prev_out_reports[interface_report_id], report, out_report_sizes[interface_report_id]);
         }
         memset(report, 0, out_report_sizes[interface_report_id]);
+    }
+
+    // give back the real input state of buttons that were held at zero for this frame
+    for (auto const& candidate : layer_release_candidates) {
+        if (candidate.suppressed) {
+            *candidate.input_state = candidate.physical;
+        }
     }
 
     processing_time += get_time() - now;

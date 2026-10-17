@@ -48,6 +48,13 @@ std::vector<reverse_mapping_t> reverse_mapping;
 std::vector<reverse_mapping_t> reverse_mapping_macros;
 std::vector<reverse_mapping_t> reverse_mapping_layers;
 
+// Buttons that release sticky layers when pressed on a layer where they have no mapping.
+struct layer_release_candidate_t {
+    int32_t* input_state;
+    uint8_t mapped_layers;  // layers on which this usage has an explicit mapping
+};
+std::vector<layer_release_candidate_t> layer_release_candidates;
+
 std::unordered_map<uint8_t, std::unordered_map<uint32_t, usage_def_t>> our_usages;  // report_id -> usage -> usage_def
 std::unordered_map<uint32_t, usage_def_t> our_usages_flat;
 bool have_dpad = false;
@@ -392,6 +399,7 @@ void set_mapping_from_config() {
     reverse_mapping.clear();
     reverse_mapping_macros.clear();
     reverse_mapping_layers.clear();
+    layer_release_candidates.clear();
     used_state_slots = 0;
     usage_state_ptr.clear();
     register_ptrs.clear();
@@ -599,6 +607,20 @@ void set_mapping_from_config() {
                     }
                 }
             }
+        }
+    }
+
+    // Independent of the unmapped passthrough setting: make sure every button we can
+    // output has a state slot so we can detect presses of unmapped buttons.
+    for (auto const& [usage, usage_def] : our_usages_flat) {
+        if ((usage & 0xFFFF0000) != 0x00090000) {
+            continue;
+        }
+        if (assign_state_slot(usage, 0, false)) {
+            layer_release_candidates.push_back((layer_release_candidate_t){
+                .input_state = get_state_ptr(usage, 0),
+                .mapped_layers = mapped_on_layers[usage],
+            });
         }
     }
 
@@ -1125,6 +1147,23 @@ void process_mapping(bool auto_repeat) {
         if ((layer_state_mask & hold_sticky.layer_mask) &&
             hold_sticky.tap_hold_state->hold && !hold_sticky.tap_hold_state->prev_hold) {
             *hold_sticky.sticky_state ^= (layer_state_mask & hold_sticky.layer_mask);
+        }
+    }
+
+    // Pressing a button that has no mapping on an active sticky layer releases that layer.
+    for (auto const& candidate : layer_release_candidates) {
+        if ((*(candidate.input_state + PREV_STATE_OFFSET) == 0) && (*candidate.input_state != 0)) {
+            for (auto const& rev_map : reverse_mapping_layers) {
+                uint16_t layer = rev_map.target & 0xFFFF;
+                if (!(layer_state_mask & (1 << layer)) || (candidate.mapped_layers & (1 << layer))) {
+                    continue;
+                }
+                for (auto const& map_source : rev_map.sources) {
+                    if (map_source.sticky) {
+                        *map_source.sticky_state &= ~map_source.layer_mask;
+                    }
+                }
+            }
         }
     }
 

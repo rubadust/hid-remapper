@@ -11,9 +11,16 @@
 #define REPORT_ID_CONFIG 100
 #define REPORT_ID_MONITOR 101
 
-#define MAX_INPUT_REPORT_ID 3
+#define MAX_INPUT_REPORT_ID 22
 
-#define NOUR_DESCRIPTORS 6
+#define OUR_DESCRIPTOR_SPACEMOUSE_PRO 6
+#define OUR_DESCRIPTOR_SPACEMOUSE_COMPACT 7
+#define NOUR_DESCRIPTORS 8
+
+// Emulated 3Dconnexion devices: three reports (translation, rotation, buttons) with signed absolute axes.
+inline bool is_spacemouse_descriptor(uint8_t descriptor_number) {
+    return (descriptor_number == OUR_DESCRIPTOR_SPACEMOUSE_PRO) || (descriptor_number == OUR_DESCRIPTOR_SPACEMOUSE_COMPACT);
+}
 
 typedef void (*device_connected_t)(uint16_t interface, uint16_t vid, uint16_t pid);
 typedef void (*device_disconnected_t)(uint8_t dev_addr);
@@ -27,6 +34,7 @@ typedef void (*handle_set_report_complete_t)(uint16_t interface, uint8_t report_
 typedef void (*clear_report_t)(uint8_t* report, uint8_t report_id, uint16_t len);
 typedef int32_t (*default_value_t)(uint32_t usage);
 typedef void (*sanitize_report_t)(uint8_t report_id, uint8_t* buffer, uint16_t len);
+typedef void (*needs_to_be_sent_t)(uint8_t** reports, uint8_t** prev_reports, uint16_t* report_sizes, bool* report_to_be_sent, uint64_t frame_counter);
 typedef bool (*should_cause_wakeup_t)(uint8_t report_id, const uint8_t* buffer, uint16_t len);
 
 struct our_descriptor_def_t {
@@ -48,6 +56,9 @@ struct our_descriptor_def_t {
     default_value_t default_value = nullptr;
     sanitize_report_t sanitize_report = nullptr;
     should_cause_wakeup_t should_cause_wakeup = nullptr;
+    needs_to_be_sent_t needs_to_be_sent = nullptr;
+    const char* manufacturer = nullptr;  // USB string descriptors, nullptr means the default
+    const char* product = nullptr;
 };
 
 extern const our_descriptor_def_t our_descriptors[];

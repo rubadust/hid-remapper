@@ -407,6 +407,11 @@ async function load_from_device() {
             });
         }
 
+        // the input labels are not stored on the device, use the SpaceMouse names for an emulated SpaceMouse
+        if ((config['our_descriptor_number'] == 6) || (config['our_descriptor_number'] == 7)) {
+            config['input_labels'] = 2;
+        }
+
         set_ui_state();
         validate_ui_expressions();
     } catch (e) {
@@ -1211,6 +1216,7 @@ function map_this_onclick(usage) {
 function set_label_groups_visibility() {
     document.getElementById('source_usage_modal').querySelector('.mouse_usages').classList.toggle('d-none', config['input_labels'] != 0);
     document.getElementById('source_usage_modal').querySelector('.gamepad_usages').classList.toggle('d-none', config['input_labels'] != 1);
+    document.getElementById('source_usage_modal').querySelector('.spacemouse_usages').classList.toggle('d-none', config['input_labels'] != 2);
     usage_search_onchange(document.getElementById('source_usage_modal').querySelector('.usage_search_box'))();
 }
 
@@ -1225,6 +1231,7 @@ function setup_usage_modal(source_or_target) {
     let usage_classes = {
         'mouse': modal_element.querySelector('.mouse_usages'),
         'gamepad': modal_element.querySelector('.gamepad_usages'),
+        'spacemouse': modal_element.querySelector('.spacemouse_usages'),
         'keyboard': modal_element.querySelector('.keyboard_usages'),
         'media': modal_element.querySelector('.media_usages'),
         'other': modal_element.querySelector('.other_usages'),
@@ -1248,8 +1255,9 @@ function setup_usage_modal(source_or_target) {
     if (source_or_target == 'source') {
         add_usage_buttons(usages['source_0']);
         add_usage_buttons(usages['source_1']);
+        add_usage_buttons(usages['source_2']);
         add_usage_buttons(usages['source']);
-        known_usages = { ...usages['source_0'], ...usages['source_1'], ...usages['source'] };
+        known_usages = { ...usages['source_0'], ...usages['source_1'], ...usages['source_2'], ...usages['source'] };
     } else {
         add_usage_buttons(usages[config['our_descriptor_number']]);
         known_usages = usages[config['our_descriptor_number']];

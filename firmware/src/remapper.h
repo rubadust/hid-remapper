@@ -16,6 +16,12 @@
 
 typedef bool (*send_report_t)(uint8_t interface, const uint8_t* report_with_id, uint8_t len);
 
+// Interval in frames (1 ms) at which the emulated SpaceMouse sends its translation and rotation reports.
+// It follows the report rate of the connected SpaceMouse.
+extern uint32_t spacemouse_report_interval;
+// Set when 3DxWare has sent the LED state of the SpaceMouse for the first time.
+extern bool spacemouse_led_state_received;
+
 void set_mapping_from_config();
 void handle_received_report(const uint8_t* report, int len, uint16_t interface, uint8_t external_report_id = 0);
 void do_handle_received_report(const uint8_t* report, int len, uint16_t interface, uint8_t external_report_id = 0);

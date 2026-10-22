@@ -118,6 +118,32 @@ uint8_t port_register = 0;
 
 uint64_t frame_counter = 0;
 
+uint32_t spacemouse_report_interval = 8;
+bool spacemouse_led_state_received = false;
+static uint64_t spacemouse_interval_us = 8000;
+static uint64_t spacemouse_last_report_us = 0;
+
+// Measures how often the connected SpaceMouse sends its translation reports (report ID 1),
+// so that the emulated one can send its reports at the same rate.
+static void measure_spacemouse_report_interval() {
+    uint64_t now = get_time();
+    if (spacemouse_last_report_us != 0) {
+        uint64_t delta = now - spacemouse_last_report_us;
+        if ((delta >= 2000) && (delta <= 40000)) {  // ignore pauses and back-to-back duplicates
+            spacemouse_interval_us = (spacemouse_interval_us * 7 + delta) / 8;
+            uint32_t frames = (spacemouse_interval_us + 500) / 1000;
+            if (frames < 2) {
+                frames = 2;
+            }
+            if (frames > 32) {
+                frames = 32;
+            }
+            spacemouse_report_interval = frames;
+        }
+    }
+    spacemouse_last_report_us = now;
+}
+
 #define HUB_PORT_NONE 255
 #define NPORTS 15
 std::unordered_map<uint8_t, uint8_t> hub_ports;  // dev_addr -> hub_port
@@ -175,6 +201,14 @@ inline void put_bits(uint8_t* data, int len, uint16_t bitpos, uint8_t size, uint
     for (int i = 0; i < size; i++) {
         put_bit(data, len, bitpos + i, (value >> i) & 1);
     }
+}
+
+// Logical range of the SpaceMouse axes in the report descriptors.
+#define SPACEMOUSE_AXIS_LIMIT 350
+
+// The emulated SpaceMouse devices are the only ones with absolute signed axes (X, Y, Z, Rx, Ry, Rz).
+inline bool is_signed_target(uint32_t usage) {
+    return is_spacemouse_descriptor(our_descriptor_number) && (usage >= 0x00010030) && (usage <= 0x00010035);
 }
 
 bool needs_to_be_sent(uint8_t report_id) {
@@ -1290,7 +1324,7 @@ void process_mapping(bool auto_repeat) {
                 }
             }
             // we don't currently have any absolute usages that can be negative
-            if ((value < 0) && !register_target) {
+            if ((value < 0) && !register_target && !is_signed_target(rev_map.target)) {
                 value = 0;
             }
             if (register_target) {
@@ -1300,7 +1334,16 @@ void process_mapping(bool auto_repeat) {
                 for (auto const& out_usage_def : rev_map.our_usages) {
                     if (out_usage_def.array_count == 0) {
                         uint32_t effective_value = value;
-                        if ((out_usage_def.size < 32) && (effective_value > ((1 << out_usage_def.size) - 1))) {
+                        if (is_signed_target(rev_map.target) && (out_usage_def.size < 32)) {
+                            int32_t clamped = value;
+                            if (clamped > SPACEMOUSE_AXIS_LIMIT) {
+                                clamped = SPACEMOUSE_AXIS_LIMIT;
+                            }
+                            if (clamped < -SPACEMOUSE_AXIS_LIMIT) {
+                                clamped = -SPACEMOUSE_AXIS_LIMIT;
+                            }
+                            effective_value = (uint32_t) clamped;
+                        } else if ((out_usage_def.size < 32) && (effective_value > ((1 << out_usage_def.size) - 1))) {
                             effective_value = (1 << out_usage_def.size) - 1;
                         }
                         put_bits(out_usage_def.data, out_usage_def.len, out_usage_def.bitpos, out_usage_def.size, effective_value);
@@ -1391,12 +1434,23 @@ void process_mapping(bool auto_repeat) {
         }
     }
 
+    bool reports_to_send[MAX_INPUT_REPORT_ID + 1];
+
+    if (our_descriptor->needs_to_be_sent != nullptr) {
+        our_descriptor->needs_to_be_sent(reports, prev_reports, report_sizes, reports_to_send, frame_counter);
+    } else {
+        for (unsigned int i = 0; i < report_ids.size(); i++) {
+            uint8_t report_id = report_ids[i];
+            reports_to_send[report_id] = needs_to_be_sent(report_id);
+        }
+    }
+
     for (unsigned int i = 0; i < report_ids.size(); i++) {  // XXX what order should we go in? maybe keyboard first so that mappings to ctrl-left click work as expected?
         uint8_t report_id = report_ids[i];
         if (our_descriptor->sanitize_report != nullptr) {
             our_descriptor->sanitize_report(report_id, reports[report_id], report_sizes[report_id]);
         }
-        if (needs_to_be_sent(report_id)) {
+        if (reports_to_send[report_id]) {
             if (or_items == OR_BUFSIZE) {
                 printf("overflow!\n");
                 break;
@@ -1422,6 +1476,11 @@ void process_mapping(bool auto_repeat) {
     }
 
     for (auto const [interface_report_id, report] : out_reports) {
+        // A SpaceMouse that is plugged in has its LED on. Leave it alone until 3DxWare has told us what it wants.
+        if (is_spacemouse_descriptor(our_descriptor_number) && !spacemouse_led_state_received) {
+            memset(report, 0, out_report_sizes[interface_report_id]);
+            continue;
+        }
         // XXX we assume everything is absolute
         if (memcmp(report, prev_out_reports[interface_report_id], out_report_sizes[interface_report_id])) {
             queue_out_report(interface_report_id >> 16, interface_report_id & 0xFF, report, out_report_sizes[interface_report_id]);
@@ -1655,6 +1714,10 @@ void do_handle_received_report(const uint8_t* report, int len, uint16_t interfac
         }
     }
 
+    if ((report_id == 1) && (interface != OUR_OUT_INTERFACE) && is_spacemouse_descriptor(our_descriptor_number)) {
+        measure_spacemouse_report_interval();
+    }
+
     uint8_t interface_idx = interface_index[interface];
     uint8_t hub_port = hub_ports[interface >> 8];
     if (hub_port != HUB_PORT_NONE) {
@@ -1777,6 +1840,10 @@ void rlencode(const std::set<uint64_t>& usage_ranges, std::vector<usage_rle_t>& 
 }
 
 bool should_scale_input(const usage_def_t& their_usage) {
+    if (is_spacemouse_descriptor(our_descriptor_number)) {
+        return false;  // SpaceMouse Pro: pass values through unscaled
+    }
+
     if ((their_usage.size == 1) ||
         (their_usage.is_relative) ||
         ((their_usage.logical_minimum == 0) && (their_usage.logical_maximum == 255)) ||
@@ -1973,6 +2040,16 @@ void parse_our_descriptor() {
         boot_protocol_keyboard ? boot_kb_report_descriptor : our_descriptor->descriptor,
         boot_protocol_keyboard ? boot_kb_report_descriptor_length : our_descriptor->descriptor_length);
 
+    if (is_spacemouse_descriptor(our_descriptor_number)) {
+        // the SpaceMouse Pro descriptor declares its axes as relative, but they are absolute
+        our_usages[1][0x00010030].is_relative = false;
+        our_usages[1][0x00010031].is_relative = false;
+        our_usages[1][0x00010032].is_relative = false;
+        our_usages[2][0x00010033].is_relative = false;
+        our_usages[2][0x00010034].is_relative = false;
+        our_usages[2][0x00010035].is_relative = false;
+    }
+
     for (auto const& [report_id, size] : report_sizes_map[ReportType::INPUT]) {
         report_sizes[report_id] = size;
         reports[report_id] = new uint8_t[size];
@@ -1985,6 +2062,10 @@ void parse_our_descriptor() {
         memset(report_masks_absolute[report_id], 0, size);
 
         report_ids.push_back(report_id);
+    }
+
+    if (is_spacemouse_descriptor(our_descriptor_number)) {
+        std::sort(report_ids.begin(), report_ids.end());
     }
 
     std::set<uint64_t> our_usage_ranges_set;

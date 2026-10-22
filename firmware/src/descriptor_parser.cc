@@ -3,6 +3,7 @@
 
 #include "descriptor_parser.h"
 #include "globals.h"
+#include "our_descriptor.h"
 #include "platform.h"
 #include "quirks.h"
 #include "remapper.h"
@@ -109,7 +110,9 @@ void parse_descriptor(uint16_t vendor_id, uint16_t product_id, const uint8_t* re
         out_reports[(interface << 16) | report_id] = new uint8_t[size];
         memset(out_reports[(interface << 16) | report_id], 0, size);
         prev_out_reports[(interface << 16) | report_id] = new uint8_t[size];
-        memset(prev_out_reports[(interface << 16) | report_id], 0, size);
+        // A SpaceMouse starts with its LED on, so the state we assume it has is not "all zeros":
+        // this makes sure the current state is sent to it once after it has been plugged in.
+        memset(prev_out_reports[(interface << 16) | report_id], is_spacemouse_descriptor(our_descriptor_number) ? 0xFF : 0, size);
     }
     for (auto const& [report_id, usage_map] : their_out_usages[interface]) {
         for (auto const& [usage, usage_def] : usage_map) {

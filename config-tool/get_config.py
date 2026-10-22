@@ -45,6 +45,7 @@ config = {
     "gpio_output_mode": 1 if (flags & GPIO_OUTPUT_MODE_FLAG) else 0,
     "input_labels": 0,
     "normalize_gamepad_inputs": bool(flags & NORMALIZE_GAMEPAD_INPUTS_FLAG),
+    "release_sticky_layer_on_unmapped_button": bool(flags & RELEASE_STICKY_LAYER_ON_UNMAPPED_BUTTON_FLAG),
     "mappings": [],
     "macros": [],
     "expressions": [],

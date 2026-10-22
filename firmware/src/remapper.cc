@@ -48,6 +48,15 @@ std::vector<reverse_mapping_t> reverse_mapping;
 std::vector<reverse_mapping_t> reverse_mapping_macros;
 std::vector<reverse_mapping_t> reverse_mapping_layers;
 
+// Buttons that release sticky layers when pressed on a layer where they have no mapping.
+struct layer_release_candidate_t {
+    int32_t* input_state;
+    uint8_t mapped_layers;  // layers on which this usage has an explicit mapping
+    bool suppressed;        // press that released a layer; input is held at zero until the button is released
+    int32_t physical;       // real input state while suppressed
+};
+std::vector<layer_release_candidate_t> layer_release_candidates;
+
 std::unordered_map<uint8_t, std::unordered_map<uint32_t, usage_def_t>> our_usages;  // report_id -> usage -> usage_def
 std::unordered_map<uint32_t, usage_def_t> our_usages_flat;
 bool have_dpad = false;
@@ -392,6 +401,7 @@ void set_mapping_from_config() {
     reverse_mapping.clear();
     reverse_mapping_macros.clear();
     reverse_mapping_layers.clear();
+    layer_release_candidates.clear();
     used_state_slots = 0;
     usage_state_ptr.clear();
     register_ptrs.clear();
@@ -599,6 +609,23 @@ void set_mapping_from_config() {
                     }
                 }
             }
+        }
+    }
+
+    // Optional feature (config flag): make sure every button we can output has a state
+    // slot, independent of the unmapped passthrough setting, so we can detect presses of
+    // buttons that have no mapping on a sticky layer.
+    for (auto const& [usage, usage_def] : our_usages_flat) {
+        if (!release_sticky_layer_on_unmapped_button || ((usage & 0xFFFF0000) != 0x00090000)) {
+            continue;
+        }
+        if (assign_state_slot(usage, 0, false)) {
+            layer_release_candidates.push_back((layer_release_candidate_t){
+                .input_state = get_state_ptr(usage, 0),
+                .mapped_layers = mapped_on_layers[usage],
+                .suppressed = false,
+                .physical = 0,
+            });
         }
     }
 
@@ -1095,6 +1122,40 @@ void process_mapping(bool auto_repeat) {
     uint64_t now = get_time();
     frame_counter++;
 
+    // If enabled in the config, pressing a button that has no mapping on an active sticky layer
+    // releases that layer.
+    // The press that releases the layer is swallowed: its input is held at zero until the button is released.
+    for (auto& candidate : layer_release_candidates) {
+        if (!release_sticky_layer_on_unmapped_button) {
+            candidate.suppressed = false;
+            continue;
+        }
+        int32_t physical = *candidate.input_state;
+        if (candidate.suppressed) {
+            if (physical == 0) {
+                candidate.suppressed = false;
+            }
+        } else if ((physical != 0) && (*(candidate.input_state + PREV_STATE_OFFSET) == 0)) {
+            for (auto const& rev_map : reverse_mapping_layers) {
+                uint16_t layer = rev_map.target & 0xFFFF;
+                if (!(layer_state_mask & (1 << layer)) || (candidate.mapped_layers & (1 << layer))) {
+                    continue;
+                }
+                for (auto const& map_source : rev_map.sources) {
+                    if (map_source.sticky && (*map_source.sticky_state & map_source.layer_mask)) {
+                        *map_source.sticky_state &= ~map_source.layer_mask;
+                        candidate.suppressed = true;
+                    }
+                }
+            }
+        }
+        if (candidate.suppressed) {
+            candidate.physical = physical;
+            *candidate.input_state = 0;
+            *(candidate.input_state + PREV_STATE_OFFSET) = 0;
+        }
+    }
+
     for (auto& tap_hold : tap_hold_usages) {
         if ((*tap_hold.input_state != 0) && (*(tap_hold.input_state + PREV_STATE_OFFSET) == 0)) {
             tap_hold.pressed_at = now;
@@ -1428,6 +1489,13 @@ void process_mapping(bool auto_repeat) {
             memcpy(prev_out_reports[interface_report_id], report, out_report_sizes[interface_report_id]);
         }
         memset(report, 0, out_report_sizes[interface_report_id]);
+    }
+
+    // give back the real input state of buttons that were held at zero for this frame
+    for (auto const& candidate : layer_release_candidates) {
+        if (candidate.suppressed) {
+            *candidate.input_state = candidate.physical;
+        }
     }
 
     processing_time += get_time() - now;

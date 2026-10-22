@@ -42,6 +42,8 @@ flags = 0
 flags |= IGNORE_AUTH_DEV_INPUTS_FLAG if ignore_auth_dev_inputs else 0
 flags |= GPIO_OUTPUT_MODE_FLAG if gpio_output_mode == 1 else 0
 flags |= NORMALIZE_GAMEPAD_INPUTS_FLAG if normalize_gamepad_inputs else 0
+release_sticky_layer_on_unmapped_button = config.get("release_sticky_layer_on_unmapped_button", False)
+flags |= RELEASE_STICKY_LAYER_ON_UNMAPPED_BUTTON_FLAG if release_sticky_layer_on_unmapped_button else 0
 
 data = struct.pack(
     "<BBBBBLBLBBB12B",
